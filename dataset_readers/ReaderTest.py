@@ -1,7 +1,10 @@
 from allennlp.common.testing import AllenNlpTestCase
 from allennlp.common.util import ensure_list
+from allennlp.data.tokenizers import WordTokenizer
 
 from dataset_readers import SpiderWikiDatasetReader
+from dataset_readers import SpiderDBContext
+
 
 import logging
 
@@ -27,6 +30,12 @@ class TestReader(AllenNlpTestCase):
         assert fields['db'].metadata == "1-10015132-11"
         assert len(instances) == 8421  # dev.jsonl length
 
+    def test_spider_db_context(self):
+        spiderDBcontext = SpiderDBContext(WordTokenizer(),'../data/spider_data/tables.json')
+        assert  len(spiderDBcontext.schemas) == 166
+        assert  spiderDBcontext.schemas["perpetrator"]["people"].name == 'people'
+        assert  len(spiderDBcontext.schemas["perpetrator"]["people"].columns) == 5
+        assert  spiderDBcontext.schemas["perpetrator"]["people"].columns[0].name == 'People_ID'
 
 
 """
