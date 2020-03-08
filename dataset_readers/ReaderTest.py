@@ -4,7 +4,7 @@ from allennlp.data.tokenizers import WordTokenizer
 
 from dataset_readers import SpiderWikiDatasetReader
 from dataset_readers import SpiderDBContext
-
+from dataset_readers import WikiDBContext
 
 import logging
 
@@ -37,7 +37,14 @@ class TestReader(AllenNlpTestCase):
         assert  len(spiderDBcontext.schemas["perpetrator"]["people"].columns) == 5
         assert  spiderDBcontext.schemas["perpetrator"]["people"].columns[0].name == 'People_ID'
 
-
+    def test_wiki_db_context(self):
+        wikicontext = WikiDBContext(WordTokenizer(),'../data/wikisql_data/dev.tables.jsonl')
+        assert  len(wikicontext.schemas) == 2716  # 2716 db
+        assert  wikicontext.schemas["1-10015132-11"]["1-10015132-11"].name == "1-10015132-11"  # "1-10015132-11"
+        assert  len(wikicontext.schemas["1-10015132-11"]["1-10015132-11"].columns) == 6  #6
+        assert  wikicontext.schemas["1-10015132-11"]["1-10015132-11"].columns[0].name == 'col0'  # "col0"
+        assert wikicontext.schemas["1-10015132-11"]["1-10015132-11"].columns[0].column_type == 'text'   # "text"
+        assert wikicontext.schemas["1-10015132-11"]["1-10015132-11"].columns[0].text == 'Player'  # "text"
 """
 if __name__ =="__main__":
     
