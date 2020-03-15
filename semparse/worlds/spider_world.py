@@ -7,8 +7,10 @@ from parsimonious.exceptions import ParseError
 from semparse.contexts.spider_context_utils import format_grammar_string, initialize_valid_actions, SqlVisitor
 from semparse.contexts.spider_db_context import SpiderDBContext
 from semparse.contexts.spider_nl_context import SpiderNLContext
-from semparse.contexts.spider_db_grammar import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
+from semparse.contexts.sql_grammar_spider import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
     update_grammar_to_be_table_names_free, update_grammar_flip_joins
+from semparse.contexts.sql_grammar_wiki import GRAMMAR_DICTIONARY_WIKI, update_grammar_with_tables_wiki, \
+    update_grammar_to_be_table_names_free_wiki
 
 
 class SpiderWorld:
@@ -22,6 +24,7 @@ class SpiderWorld:
 
         # NOTE: This base dictionary should not be modified.
         self.base_grammar_dictionary = deepcopy(GRAMMAR_DICTIONARY)
+        # self.base_grammar_dictionary = deepcopy(GRAMMAR_DICTIONARY_WIKI)
         self.origin_query = query
 
         def remove_from_clause(query: Optional[List[str]]) -> Optional[List[str]]:
