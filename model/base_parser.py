@@ -1,10 +1,12 @@
-from typing import Dict, Any, List, Tuple
+import difflib
+from typing import Dict, Any, List, Tuple, Mapping, Sequence
 
 import overrides
+import sqlparse
 import torch
 from allennlp.common.util import pad_sequence_to_length
 from allennlp.data import Vocabulary
-from allennlp.data.fields.production_rule_field import ProductionRule
+from allennlp.data.fields.production_rule_field import ProductionRule, ProductionRuleArray
 from allennlp.models import Model
 from allennlp.modules import TextFieldEmbedder, Seq2SeqEncoder, Seq2VecEncoder, TimeDistributed, Attention, Embedding, \
     FeedForward
@@ -13,6 +15,7 @@ from allennlp.state_machines.states import RnnStatelet, GrammarStatelet
 from allennlp.state_machines.trainers import MaximumMarginalLikelihood
 from allennlp.state_machines.transition_functions import LinkingTransitionFunction
 
+from dataset_reader.dataset_util.utils import action_sequence_to_sql
 from modules.memory_schema_attn import MemAttn
 from semparse.worlds.spider_world import SpiderWorld
 from state_machines.states.grammar_based_state import GrammarBasedState
@@ -42,6 +45,7 @@ class MMParser(Model):
                  action_embedding_dim: int,
                  max_decoding_steps: int,
                  nhop: int,
+                 decoding_nhop: int,
                  vocab: Vocabulary,
                  training_beam_size: int = None,
                  add_action_bias: bool = True,
@@ -66,11 +70,14 @@ class MMParser(Model):
         else:
             input_action_dim = action_embedding_dim
         self._action_embedder = Embedding(num_embeddings=num_actions, embedding_dim=input_action_dim)
+        self._input_action_embedder = Embedding(num_embeddings=num_actions, embedding_dim=action_embedding_dim)
         self._output_action_embedder = Embedding(num_embeddings=num_actions, embedding_dim=action_embedding_dim)
 
-        # TODO
-        self._num_entity_types = -1
-        self._entity_type_encoder_embedding = Embedding(self._num_entity_types, question_encoder.get_output_dim())
+        self._entity_type_decoder_input_embedding= Embedding(self._num_entity_types, action_embedding_dim)
+        self._entity_type_decoder_output_embedding = Embedding(self._num_entity_types, action_embedding_dim)
+
+        self._num_entity_types = 9
+        self._entity_type_encoder_embedding = Embedding(self._num_entity_types, question_encoder.get_output_dim()/2)
 
         self._decoder_num_layers = decoder_num_layers
         self._action_embedding_dim = action_embedding_dim
@@ -93,6 +100,7 @@ class MMParser(Model):
                 action_embedding_dim=action_embedding_dim,
                 input_attention=input_attention,
                 past_attention=past_attention,
+                decoding_nhop=decoding_nhop,
                 predict_start_type_separately=False,
                 add_action_bias=self._add_action_bias,
                 dropout=dropout,
@@ -159,12 +167,11 @@ class MMParser(Model):
                                                          self._transition_function,
                                                          keep_final_unfinished_states=False)
 
-            # TODO
-            # self._compute_validation_outputs(valid_actions,
-            #                                  best_final_states,
-            #                                  world,
-            #                                  action_sequence,
-            #                                  outputs)
+            self._compute_validation_outputs(valid_actions,
+                                             best_final_states,
+                                             worlds,
+                                             action_sequence,
+                                             outputs)
         return outputs
 
     def _get_initial_state(self,
@@ -195,9 +202,13 @@ class MMParser(Model):
         entity_type_embeddings = self._entity_type_encoder_embedding(entity_types)
 
         # (batch_size, num_entities, embedding_dim)
-        K = self._input_mm_encoder(input_mm_schema, schema_mask)
-        V = self._output_mm_encoder(output_mm_schema, schema_mask)
-
+        # An entity memory-representation is concatenated with two parts:
+        # 1. Entity tokens embedding
+        # 2. Entity type embedding
+        K = torch.cat([self._input_mm_encoder(input_mm_schema, schema_mask),
+                       entity_type_embeddings], dim = 2)
+        V = torch.cat([self._output_mm_encoder(output_mm_schema, schema_mask),
+                       entity_type_embeddings], dim = 2)
         encoder_output_dim = self._encoder.get_output_dim()
 
         # Encodes utterance in the context of the schema, which is stored in external memory
@@ -205,9 +216,11 @@ class MMParser(Model):
         final_encoder_output = util.get_final_encoder_states(encoder_outputs_with_context,
                                                              utterance_mask,
                                                              self._encoder.is_bidirectional())
-        # TODO
+
+        max_entities_relevance = attn_weights.max(dim=1)[0]
+        entities_relevance = max_entities_relevance.unsqueeze(-1).detach()
         if self._self_attend:
-            entities_ff = self._ent2ent_ff(V)
+            entities_ff = self._ent2ent_ff(entity_type_embeddings * entities_relevance)
             linked_actions_linking_scores = torch.bmm(entities_ff, entities_ff.transpose(1, 2))
         else:
             linked_actions_linking_scores = [None] * batch_size
@@ -349,9 +362,11 @@ class MMParser(Model):
                 global_action_tensor = torch.cat(global_action_tensors, dim=0).to(
                     global_action_tensors[0].device).long()
                 global_input_embeddings = self._action_embedder(global_action_tensor)
-                global_output_embeddings = self._output_action_embedder(global_action_tensor)
+                global_input_action_embeddings = self._input_action_embedder(global_action_tensor)
+                global_output_action_embeddings = self._output_action_embedder(global_action_tensor)
                 translated_valid_actions[key]['global'] = (global_input_embeddings,
-                                                           global_output_embeddings,
+                                                           global_input_action_embeddings,
+                                                           global_output_action_embeddings,
                                                            list(global_action_ids))
             if linked_actions:
                 linked_rules, linked_action_ids = zip(*linked_actions)
@@ -366,7 +381,10 @@ class MMParser(Model):
 
                 # if not self._decoder_use_graph_entities:
                 entity_type_tensor = entity_types[entity_ids]
-                entity_type_embeddings = (self._entity_type_decoder_embedding(entity_type_tensor)
+                entity_type_input_embeddings = (self._entity_type_decoder_input_embedding(entity_type_tensor)
+                                          .to(entity_types.device)
+                                          .float())
+                entity_type_output_embeddings = (self._entity_type_decoder_output_embedding(entity_type_tensor)
                                           .to(entity_types.device)
                                           .float())
                 # else:
@@ -377,14 +395,117 @@ class MMParser(Model):
 
                 if self._self_attend:
                     translated_valid_actions[key]['linked'] = (entity_linking_scores,
-                                                               entity_type_embeddings,
+                                                               entity_type_input_embeddings,
                                                                list(linked_action_ids),
-                                                               entity_action_linking_scores)
+                                                               entity_action_linking_scores,
+                                                               entity_type_output_embeddings)
                 else:
                     translated_valid_actions[key]['linked'] = (entity_linking_scores,
-                                                               entity_type_embeddings,
-                                                               list(linked_action_ids))
+                                                               entity_type_input_embeddings,
+                                                               list(linked_action_ids),
+                                                               entity_type_output_embeddings)
 
         return GrammarStatelet(['statement'],
                                translated_valid_actions,
                                self.is_nonterminal)
+
+    @staticmethod
+    def is_nonterminal(token: str):
+        if token[0] == '"' and token[-1] == '"':
+            return False
+        return True
+
+    @staticmethod
+    def _action_history_match(predicted: List[int], targets: torch.LongTensor) -> int:
+        # TODO(mattg): this could probably be moved into a FullSequenceMatch metric, or something.
+        # Check if target is big enough to cover prediction (including start/end symbols)
+        if len(predicted) > targets.size(0):
+            return 0
+        predicted_tensor = targets.new_tensor(predicted)
+        targets_trimmed = targets[:len(predicted)]
+        # Return 1 if the predicted sequence is anywhere in the list of targets.
+        return torch.max(torch.min(targets_trimmed.eq(predicted_tensor), dim=0)[0]).item()
+
+    @overrides
+    def get_metrics(self, reset: bool = False) -> Dict[str, float]:
+        return {
+            '_match/exact_match': self._exact_match.get_metric(reset),
+            'sql_match': self._sql_evaluator_match.get_metric(reset),
+            '_others/action_similarity': self._action_similarity.get_metric(reset),
+            '_match/match_single': self._acc_single.get_metric(reset),
+            '_match/match_hard': self._acc_multi.get_metric(reset),
+            'beam_hit': self._beam_hit.get_metric(reset)
+        }
+
+    def _compute_validation_outputs(self,
+                                    actions: List[List[ProductionRuleArray]],
+                                    best_final_states: Mapping[int, Sequence[GrammarBasedState]],
+                                    world: List[SpiderWorld],
+                                    target_list: List[List[str]],
+                                    outputs: Dict[str, Any]) -> None:
+        batch_size = len(actions)
+
+        outputs['predicted_sql_query'] = []
+
+        action_mapping = {}
+        for batch_index, batch_actions in enumerate(actions):
+            for action_index, action in enumerate(batch_actions):
+                action_mapping[(batch_index, action_index)] = action[0]
+
+        for i in range(batch_size):
+            # gold sql exactly as given
+            original_gold_sql_query = ' '.join(world[i].get_query_without_table_hints())
+
+            if i not in best_final_states:
+                self._exact_match(0)
+                self._action_similarity(0)
+                self._sql_evaluator_match(0)
+                self._acc_multi(0)
+                self._acc_single(0)
+                outputs['predicted_sql_query'].append('')
+                continue
+
+            best_action_indices = best_final_states[i][0].action_history[0]
+
+            action_strings = [action_mapping[(i, action_index)]
+                              for action_index in best_action_indices]
+            predicted_sql_query = action_sequence_to_sql(action_strings, add_table_names=True)
+            # print ("predicted_sql_query:{}".format(predicted_sql_query))
+
+            predicted_sql_query = self._add_from_clause(predicted_sql_query, world[i])
+            # predicted_sql_query = ' '.join([token for token in predicted_sql_query_tokens])
+            # print("predicted_sql_query:{}".format(predicted_sql_query))
+            outputs['predicted_sql_query'].append(sqlparse.format(predicted_sql_query, reindent=False))
+
+            if target_list is not None:
+                targets = target_list[i].data
+            target_available = target_list is not None and targets[0] > -1
+
+            if target_available:
+                sequence_in_targets = self._action_history_match(best_action_indices, targets)
+                self._exact_match(sequence_in_targets)
+
+                sql_evaluator_match = self._evaluate_func(original_gold_sql_query, predicted_sql_query, world[i].db_id)
+                self._sql_evaluator_match(sql_evaluator_match)
+
+                similarity = difflib.SequenceMatcher(None, best_action_indices, targets)
+                self._action_similarity(similarity.ratio())
+
+                difficulty = self._query_difficulty(targets, action_mapping, i)
+                if difficulty:
+                    self._acc_multi(sql_evaluator_match)
+                else:
+                    self._acc_single(sql_evaluator_match)
+
+            beam_hit = False
+            for pos, final_state in enumerate(best_final_states[i]):
+                action_indices = final_state.action_history[0]
+                action_strings = [action_mapping[(i, action_index)]
+                                  for action_index in action_indices]
+                candidate_sql_query = action_sequence_to_sql(action_strings, add_table_names=True)
+
+                if target_available:
+                    correct = self._evaluate_func(original_gold_sql_query, candidate_sql_query, world[i].db_id)
+                    if correct:
+                        beam_hit = True
+                    self._beam_hit(beam_hit)

@@ -52,7 +52,10 @@ class RnnStatelet:
                  attended_input: torch.Tensor,
                  encoder_outputs: List[torch.Tensor],
                  encoder_output_mask: List[torch.Tensor],
-                 decoder_outputs: Optional[torch.Tensor] = None) -> None:
+                 decoding_step: int = 0,
+                 decoder_outputs: Optional[torch.Tensor] = None,
+                 decoder_input_action_embeddings: Optional[torch.Tensor] = None,
+                 decoder_output_action_embeddings: Optional[torch.Tensor] = None,) -> None:
         self.hidden_state = hidden_state
         self.memory_cell = memory_cell
         self.previous_action_embedding = previous_action_embedding
@@ -60,6 +63,9 @@ class RnnStatelet:
         self.encoder_outputs = encoder_outputs
         self.encoder_output_mask = encoder_output_mask
         self.decoder_outputs = decoder_outputs
+        self.decoding_step = decoding_step
+        self.decoder_action_input_embeddings = decoder_input_action_embeddings
+        self.decoder_action_output_embeddings = decoder_output_action_embeddings
 
     def __eq__(self, other):
         if isinstance(self, other.__class__):

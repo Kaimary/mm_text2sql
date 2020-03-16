@@ -7,19 +7,19 @@ from allennlp.nn import Activation, util
 
 from allennlp.state_machines.states.grammar_based_state import GrammarBasedState
 from allennlp.state_machines.transition_functions import BasicTransitionFunction
-from allennlp.state_machines.transition_functions.linking_transition_function import LinkingTransitionFunction
 from overrides import overrides
-from torch.nn import Linear
+from torch.nn import Linear, Embedding
 
+from modules.memory_decoder_attn import MemDecoderAttn
 from state_machines.states.rnn_statelet import RnnStatelet
 
-# TODO
 class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
     def __init__(self,
                  encoder_output_dim: int,
                  action_embedding_dim: int,
                  input_attention: Attention,
                  past_attention: Attention,
+                 decoding_nhop: int,
                  activation: Activation = Activation.by_name('relu')(),
                  predict_start_type_separately: bool = True,
                  num_start_types: int = None,
@@ -38,6 +38,13 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
 
         self._past_attention = past_attention
         self._ent2ent_ff = FeedForward(1, 1, 1, Activation.by_name('linear')())
+        self._decoder_attn = MemDecoderAttn(past_attention, encoder_output_dim, decoding_nhop)
+
+        # self.A = Embedding(num_embeddings=100, embedding_dim=encoder_output_dim)
+        # self.B = Embedding(num_embeddings=100, embedding_dim=encoder_output_dim)
+        # Encode temporal information, and set maximum memory size as 100
+        self.A_t = Embedding(num_embeddings=100, embedding_dim=encoder_output_dim)
+        self.B_t = Embedding(num_embeddings=100, embedding_dim=encoder_output_dim)
 
     @overrides
     def take_step(self,
@@ -85,12 +92,25 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
             hidden_state = torch.stack([rnn_state.hidden_state for rnn_state in state.rnn_state])
             memory_cell = torch.stack([rnn_state.memory_cell for rnn_state in state.rnn_state])
 
-        previous_action_embedding = torch.stack([rnn_state.previous_action_embedding
-                                                 for rnn_state in state.rnn_state])
+        # previous_action_embedding = torch.stack([rnn_state.previous_action_embedding
+        #                                          for rnn_state in state.rnn_state])
+
+        attended_action_list = []
+        for i, rnn_state in enumerate(state.rnn_state):
+            if rnn_state.decoder_input_action_embeddings is not None:
+                decoder_input_action_embeddings = rnn_state.decoder_input_action_embeddings
+                decoder_output_action_embeddings = rnn_state.decoder_output_action_embeddings
+                attended_action, attn_weights = self._decoder_attn(hidden_state[i],
+                                                  decoder_input_action_embeddings,
+                                           decoder_output_action_embeddings)
+                attended_action_list.append(attended_action)
+            else:
+                attended_action_list.append(None)
 
         # (group_size, decoder_input_dim)
+        # Use memory networks to get attended action embedding from all previous actions to replace previous action embedding
         projected_input = self._input_projection_layer(torch.cat([attended_question,
-                                                                  previous_action_embedding], -1))
+                                                                  attended_action_list], -1))
         decoder_input = self._activation(projected_input)
         if self._num_layers > 1:
             _, (hidden_state, memory_cell) = self._decoder_cell(decoder_input.unsqueeze(0),
@@ -170,6 +190,7 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
             predicted_action_embedding = predicted_action_embeddings[group_index]
             embedded_actions: List[int] = []
 
+            input_action_embeddings = None
             output_action_embeddings = None
             embedded_action_logits = None
             current_log_probs = None
@@ -177,14 +198,14 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
             linked_action_ent2ent_logits = None
 
             if 'global' in instance_actions:
-                action_embeddings, output_action_embeddings, embedded_actions = instance_actions['global']
+                action_embeddings, input_action_embeddings, output_action_embeddings, embedded_actions = instance_actions['global']
                 # This is just a matrix product between a (num_actions, embedding_dim) matrix and an
                 # (embedding_dim, 1) matrix.
                 embedded_action_logits = action_embeddings.mm(predicted_action_embedding.unsqueeze(-1)).squeeze(-1)
                 action_ids = embedded_actions
 
             if 'linked' in instance_actions:
-                linking_scores, type_embeddings, linked_actions, entity_action_linking_scores = instance_actions['linked']
+                linking_scores, type_input_embeddings, linked_actions, entity_action_linking_scores, type_output_embeddings= instance_actions['linked']
                 action_ids = embedded_actions + linked_actions
                 # (num_question_tokens, 1)
 
@@ -212,9 +233,14 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
                 # decoder step.  For linked actions, we don't have any action embedding, so we use
                 # the entity type instead.
                 if output_action_embeddings is not None:
-                    output_action_embeddings = torch.cat([output_action_embeddings, type_embeddings], dim=0)
+                    output_action_embeddings = torch.cat([output_action_embeddings, type_output_embeddings], dim=0)
                 else:
-                    output_action_embeddings = type_embeddings
+                    output_action_embeddings = type_output_embeddings
+
+                if input_action_embeddings is not None:
+                    input_action_embeddings = torch.cat([input_action_embeddings, type_input_embeddings], dim=0)
+                else:
+                    input_action_embeddings = type_input_embeddings
 
                 if embedded_action_logits is not None:
                     action_logits = torch.cat([embedded_action_logits, linked_action_logits], dim=-1)
@@ -235,6 +261,7 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
             batch_results[state.batch_indices[group_index]].append((group_index,
                                                                     log_probs,
                                                                     current_log_probs,
+                                                                    input_action_embeddings,
                                                                     output_action_embeddings,
                                                                     action_ids,
                                                                     linked_action_logits_encoder,
@@ -274,7 +301,8 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
         def make_state(group_index: int,
                        action: int,
                        new_score: torch.Tensor,
-                       action_embedding: torch.Tensor) -> GrammarBasedState:
+                       action_input_embedding: torch.Tensor,
+                       action_output_embedding: torch.Tensor) -> GrammarBasedState:
             batch_index = state.batch_indices[group_index]
 
             decoder_outputs = state.rnn_state[group_index].decoder_outputs
@@ -289,13 +317,31 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
                         hidden_state[group_index].unsqueeze(0)
                     ), dim=0), decoder_outputs_ids + [action]
 
+            # Temporal encoding for both input and output action embeddings
+            decoding_step = state.rnn_state[group_index].decoding_step + 1
+            decoder_input_action_embeddings = state.rnn_state[group_index].decoder_input_action_embeddings
+            if decoder_input_action_embeddings is None:
+                decoder_input_action_embeddings = action_input_embedding + self.A_t(decoding_step)
+            else:
+                decoder_input_action_embeddings = torch.stack([decoder_input_action_embeddings,
+                                                               (action_input_embedding + self.A_t(decoding_step))])
+
+            decoder_output_action_embeddings = state.rnn_state[group_index].decoder_output_action_embeddings
+            if decoder_output_action_embeddings is None:
+                decoder_output_action_embeddings = action_output_embedding + self.B_t(decoding_step)
+            else:
+                decoder_output_action_embeddings = torch.stack([decoder_output_action_embeddings,
+                                                                (action_output_embedding + self.B_t(decoding_step))])
+
             new_rnn_state = RnnStatelet(hidden_state[group_index],
                                         memory_cell[group_index],
-                                        action_embedding,
+                                        action_output_embedding,
                                         attended_question[group_index],
                                         state.rnn_state[group_index].encoder_outputs,
                                         state.rnn_state[group_index].encoder_output_mask,
-                                        decoder_outputs)
+                                        decoder_outputs,
+                                        decoder_input_action_embeddings,
+                                        decoder_output_action_embeddings)
             for i, _, current_log_probs, _, actions, lsq, lsp in batch_action_probs[batch_index]:
                 if i == group_index:
                     considered_actions = actions
@@ -319,10 +365,10 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
             if allowed_actions and not max_actions:
                 # If we're given a set of allowed actions, and we're not just keeping the top k of
                 # them, we don't need to do any sorting, so we can speed things up quite a bit.
-                for group_index, log_probs, _, action_embeddings, actions in results:
-                    for log_prob, action_embedding, action in zip(log_probs, action_embeddings, actions):
+                for group_index, log_probs, _, input_action_embeddings, output_action_embeddings, actions in results:
+                    for log_prob, input_action_embedding, output_action_embedding, action in zip(log_probs, input_action_embeddings, output_action_embeddings, actions):
                         if action in allowed_actions[group_index]:
-                            new_states.append(make_state(group_index, action, log_prob, action_embedding))
+                            new_states.append(make_state(group_index, action, log_prob, input_action_embedding, output_action_embedding))
             else:
                 # In this case, we need to sort the actions.  We'll do that on CPU, as it's easier,
                 # and our action list is on the CPU, anyway.
@@ -384,3 +430,4 @@ class AttendPastSchemaItemsTransitionFunction(BasicTransitionFunction):
         # (group_size, encoder_output_dim)
         attended_question = util.weighted_sum(value, attention_weights)
         return attended_question, attention_weights
+

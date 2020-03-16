@@ -6,8 +6,7 @@ from parsimonious.exceptions import ParseError
 
 from semparse.contexts.spider_context_utils import format_grammar_string, initialize_valid_actions, SqlVisitor
 from semparse.contexts.spider_db_context import SpiderDBContext
-from semparse.contexts.spider_nl_context import SpiderNLContext
-from semparse.contexts.spider_db_grammar import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
+from semparse.contexts.sql_grammar import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
     update_grammar_to_be_table_names_free, update_grammar_flip_joins
 
 
@@ -16,7 +15,7 @@ class SpiderWorld:
     World representation for spider dataset.
     """
 
-    def __init__(self, db_context: SpiderDBContext, nl_context: SpiderNLContext, query: Optional[List[str]], allow_alias: bool = False) -> None:
+    def __init__(self, db_context: SpiderDBContext, query: Optional[List[str]], allow_alias: bool = False) -> None:
         self.db_id = db_context.db_id
         self.allow_alias = allow_alias
 
@@ -57,7 +56,6 @@ class SpiderWorld:
 
         self.query = remove_from_clause(query)
         self.db_context = db_context
-        self.nl_context = nl_context
 
         # keep a list of entities names as they are given in sql queries
         self.entities_names = {}
