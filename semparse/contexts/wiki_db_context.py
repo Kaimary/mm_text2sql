@@ -38,7 +38,7 @@ class WikiDBContext:
 
         tokenized_utterance = tokenizer.tokenize(utterance.lower())
 
-        # to-do  keyword argument lemma 报错 可能是跟 allennlp 的版本有关 lemma -> lemma_
+        #todo  keyword argument lemma 报错 可能是跟 allennlp 的版本有关 lemma -> lemma_
         self.tokenized_utterance = [Token(text=t.text, lemma_=t.lemma_) for t in tokenized_utterance]
 
 
@@ -48,16 +48,17 @@ class WikiDBContext:
         self.schema = WikiDBContext.schemas[db_id]
 
 
-        #todo  这个knowledge_graph 有什么用啊？
+
 
         self.knowledge_graph = self.get_db_knowledge_graph(db_id)
 
-        #entity_texts里面的table_name 毫无意义啊
+        #todo entity_texts里面的table_name 毫无意义啊 是一串这样的 “1-10015132-11” 的字符 而且分词处理后是 [1, -, 10015132, -, 11]的东西
+        # 这样token加入到vocabulary 里面简直是灾难啊
         entity_texts = [self.knowledge_graph.entity_text[entity].lower()
                         for entity in self.knowledge_graph.entities]
         entity_tokens = tokenizer.batch_tokenize(entity_texts)
 
-        # error  lemma
+        #todo error  lemma=> lemma_
         self.entity_tokens = [[Token(text=t.text, lemma_=t.lemma_) for t in et] for et in entity_tokens]
 
 
@@ -210,7 +211,7 @@ class WikiDBContext:
             # 根据utterance来找到所属的column_name  // 这个name是前面提到entity_key_for_column这个函数返回的name
             token_columns = self._string_in_table(normalized_token_text, string_column_mapping)
             if token_columns:
-                # 关键是 wiki 中的type还有一个 real 我没有额外的处理
+                #todo 关键是 wiki 中的type还有一个 real类型 大概是float类型 我没有额外的处理
                 token_type = token_columns[0].split(":")[1]
                 entity_data.append({'value': normalized_token_text,
                                     'token_start': i,
@@ -228,7 +229,7 @@ class WikiDBContext:
         # return expanded_entities, extracted_numbers  #TODO(shikhar) Handle conjunctions
 
         return expanded_entities
-
+    # 未修改
     def _string_in_table(self, candidate: str,
                          string_column_mapping: Dict[str, set]) -> List[str]:
         """
@@ -246,7 +247,7 @@ class WikiDBContext:
                     candidate_column_names.extend(column_names)
         candidate_column_names = list(set(candidate_column_names))
         return candidate_column_names
-
+    # 未修改
     def _expand_entities(self, question, entity_data, string_column_mapping: Dict[str, set]):
         new_entities = []
         for entity in entity_data:

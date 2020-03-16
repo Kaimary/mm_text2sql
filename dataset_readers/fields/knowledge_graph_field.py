@@ -65,7 +65,7 @@ class SpiderKnowledgeGraphField(KnowledgeGraphField):
 
                     entity_token_features.append(max(neighbour_features))
         return linking_features
-
+#todo 完全和SpiderKnowledgeGraphField一样 只是对称的写了一个 方便日后修改
 class WikiKnowledgeGraphField(KnowledgeGraphField):
     """
     This implementation calculates all non-graph-related features (i.e. no related_column),

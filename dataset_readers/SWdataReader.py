@@ -33,7 +33,7 @@ class SpiderWikiDatasetReader(DatasetReader):
                  load_cache: bool = True,
                  save_cache: bool = True,
                  loading_limit=-1,
-                 is_spider: bool = True
+                 is_spider: bool = True   #todo 构造函数和之前的唯一区别就是这个is_spider参数 默认是spider数据集
                  ):
         super().__init__(lazy=lazy)
         # default spacy tokenizer splits the common token 'id' to ['i', 'd'], we here write a manual fix for that
@@ -177,7 +177,7 @@ class SpiderWikiDatasetReader(DatasetReader):
         else:
             db_context = WikiDBContext(db_id, utterance, tokenizer=self._tokenizer,
                                          tables_file=self._tables_file, dataset_path=self._dataset_path)
-            print(db_context.entity_tokens)
+            #print(db_context.entity_tokens)
             #todo 这个WikiKnowledgeGraphField和对应的spider的一模一样 只是改动了类名
             table_field= WikiKnowledgeGraphField(db_context.knowledge_graph,
                                                 db_context.tokenized_utterance,
@@ -239,26 +239,5 @@ class SpiderWikiDatasetReader(DatasetReader):
 
         return Instance(fields)
 
-
-
-'''
-        # for wiki
-        else:
-            if not file_path.endswith('.jsonl'):
-                raise ConfigurationError(f"dataset_path of Wiki error...{file_path}")
-            logger.info("reading instance from file at: %s",file_path)
-            with open(file_path,"r") as data_file:
-                for _index,line in enumerate(data_file.readlines()):
-                    line=line.strip("\n")
-                    if not line:
-                        continue
-                    ex = json.loads(line)
-                    if 'sql' in ex:
-                        instance=self.text_to_instance(ex['question'],ex['table_id'],sqldict=ex['sql'])
-                    else:
-                        instance=self.text_to_instance(ex['question'],ex['table_id'])
-                    if instance is not None:
-                        yield  instance
-'''
 
 

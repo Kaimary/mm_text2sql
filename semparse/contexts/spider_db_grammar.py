@@ -7,7 +7,7 @@ from typing import List, Dict
 
 from dataset_readers.dataset_utils import  Table
 
-
+#todo gnn项目中原始的grammar  在spider_world.py 和 wiki_world.py 中使用
 GRAMMAR_DICTIONARY = {}
 GRAMMAR_DICTIONARY["statement"] = ['(query ws iue ws query)', '(query ws)']
 GRAMMAR_DICTIONARY["iue"] = ['"intersect"', '"except"', '"union"']

@@ -38,7 +38,7 @@ class SpiderDBContext:
         self.utterance = utterance
 
         tokenized_utterance = tokenizer.tokenize(utterance.lower())
-        # to-do  keyword argument lemma 报错 可能是跟 allennlp 的版本有关 官方的api上已经改成了 lemma_
+        #todo keyword argument lemma 报错 可能是跟 allennlp 的版本有关 官方的api上已经改成了 lemma_ 于是将lemma替换为lemma_
         self.tokenized_utterance = [Token(text=t.text, lemma_=t.lemma_) for t in tokenized_utterance]
 
         if db_id not in SpiderDBContext.schemas:
@@ -50,7 +50,7 @@ class SpiderDBContext:
         entity_texts = [self.knowledge_graph.entity_text[entity].lower()
                         for entity in self.knowledge_graph.entities]
         entity_tokens = tokenizer.batch_tokenize(entity_texts)
-        # error  lemma => lemma_
+        #todo  error  lemma => lemma_ 和上面一样的错误
         self.entity_tokens = [[Token(text=t.text, lemma_=t.lemma_) for t in et] for et in entity_tokens]
 
 

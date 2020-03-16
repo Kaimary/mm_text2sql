@@ -36,9 +36,9 @@ wiki_schemas = None
 def gen_wiki_tokens(ex: JsonDict,schema_path: str):
     """
 
-    :param ex:
-    :param schema_path:
-    :return:
+    :param ex: wiki的json格式数据
+    :param schema_path:  table 文件地址
+    :return: 将wikisql中特殊格式的sql转换成为正常的格式
     ['select',
      'avg', '(', 'singer@age', ')', ',',
      'min', '(', 'singer@age', ')', ',',
@@ -46,9 +46,9 @@ def gen_wiki_tokens(ex: JsonDict,schema_path: str):
      'from', 'singer',
      'where', 'singer@country', '=', "'value'"]
      spider 的输出就是这样的
+    完全仿照 column会在@前附加table_id信息
 
-
-     我也对列名做了 lower()的处理
+    我也对列名做了 lower()的处理
 
 
     """
@@ -103,7 +103,7 @@ def gen_wiki_tokens(ex: JsonDict,schema_path: str):
 schemas_value=None
 def read_wiki_dataset_values(db_id : str, table_path: str , tables: List[str]):
     """
-
+    读取wikisql中的具体的记录 ,每张表只有5条左右
     :param db_id:
     :param table_path:
     :param tables:
@@ -136,7 +136,7 @@ def read_wiki_dataset_values(db_id : str, table_path: str , tables: List[str]):
                     rows=[tuple(row) for row in db['rows']]
                     #print(rows)
                     schemas_value[db_id]=rows
-            # todo  finish reading
+
             return schemas_value
 
 
