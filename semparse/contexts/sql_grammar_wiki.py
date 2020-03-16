@@ -5,7 +5,7 @@ for the any of the text2sql datasets, with the grammar and the valid actions.
 """
 from typing import List, Dict
 
-from dataset_reader.dataset_util.utils import Table
+from dataset_readers.dataset_utils.common import Table
 
 
 GRAMMAR_DICTIONARY_WIKI = {}

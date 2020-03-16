@@ -12,10 +12,14 @@ from semparse.contexts.spider_context_utils import format_grammar_string  , init
 #todo 设置了临时的WikiNLContext
 from semparse.contexts.wiki_nl_context import WikiNLContext
 
-#todo 这个grammar 等钱学长上传 先用spider的grammar
-from semparse.contexts.spider_db_grammar  import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
-    update_grammar_to_be_table_names_free, update_grammar_flip_joins
+#todo ParseError  用原来的只是会报ParseError
+from semparse.contexts.spider_db_grammar import GRAMMAR_DICTIONARY,update_grammar_with_tables,\
+    update_grammar_to_be_table_names_free
 
+#todo 用新的grammar_wiki  构造函数都会报错grammar = Grammar(format_grammar_string(grammar_with_context))
+#from semparse.contexts.sql_grammar_wiki import GRAMMAR_DICTIONARY_WIKI,update_grammar_with_tables_wiki,\
+#    update_grammar_to_be_table_names_free_wiki
+from semparse.contexts.spider_db_grammar import update_grammar_flip_joins
 
 class WikiWorld:
     """

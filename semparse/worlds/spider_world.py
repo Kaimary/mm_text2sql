@@ -7,11 +7,12 @@ from parsimonious.exceptions import ParseError
 from semparse.contexts.spider_context_utils import format_grammar_string, initialize_valid_actions, SqlVisitor
 from semparse.contexts.spider_db_context import SpiderDBContext
 from semparse.contexts.spider_nl_context import SpiderNLContext
-<<<<<<< HEAD
-from semparse.contexts.sql_grammar_spider  import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
-=======
+
+#todo 用spider_db_grammar就没有parseError
+#from semparse.contexts.spider_db_grammar import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
+#    update_grammar_to_be_table_names_free, update_grammar_flip_joins
+#todo 用sql_grammar_spider就会报错
 from semparse.contexts.sql_grammar_spider import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
->>>>>>> upstream/grammar
     update_grammar_to_be_table_names_free, update_grammar_flip_joins
 from semparse.contexts.sql_grammar_wiki import GRAMMAR_DICTIONARY_WIKI, update_grammar_with_tables_wiki, \
     update_grammar_to_be_table_names_free_wiki
