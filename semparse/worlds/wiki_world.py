@@ -4,32 +4,34 @@ from copy import deepcopy
 from parsimonious import Grammar
 from parsimonious.exceptions import ParseError
 
-from semparse.contexts.spider_context_utils import format_grammar_string, initialize_valid_actions, SqlVisitor
-from semparse.contexts.spider_db_context import SpiderDBContext
+from semparse.contexts.wiki_db_context import WikiDBContext
 
-#todo 用spider_db_grammar就没有parseError
-#from semparse.contexts.spider_db_grammar import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
-#    update_grammar_to_be_table_names_free, update_grammar_flip_joins
-#todo 用sql_grammar_spider就会报错
-from semparse.contexts.sql_grammar_spider import GRAMMAR_DICTIONARY, update_grammar_with_tables, \
+#todo 这几个utils函数感觉是和具体的sql无关 而和grammar相关 先用spider的
+from semparse.contexts.spider_context_utils import format_grammar_string  , initialize_valid_actions, SqlVisitor
 
-    update_grammar_to_be_table_names_free, update_grammar_flip_joins
-from semparse.contexts.sql_grammar_wiki import GRAMMAR_DICTIONARY_WIKI, update_grammar_with_tables_wiki, \
-    update_grammar_to_be_table_names_free_wiki
+#todo 设置了临时的WikiNLContext
+from semparse.contexts.wiki_nl_context import WikiNLContext
 
+#todo ParseError  用原来的只是会报ParseError
+from semparse.contexts.spider_db_grammar import GRAMMAR_DICTIONARY,update_grammar_with_tables,\
+    update_grammar_to_be_table_names_free
 
-class SpiderWorld:
+#todo 用新的grammar_wiki  构造函数都会报错grammar = Grammar(format_grammar_string(grammar_with_context))
+#from semparse.contexts.sql_grammar_wiki import GRAMMAR_DICTIONARY_WIKI,update_grammar_with_tables_wiki,\
+#    update_grammar_to_be_table_names_free_wiki
+from semparse.contexts.spider_db_grammar import update_grammar_flip_joins
+
+class WikiWorld:
     """
     World representation for spider dataset.
     """
-    def __init__(self, db_context: SpiderDBContext, query: Optional[List[str]], allow_alias: bool = False) -> None:
-    
+
+    def __init__(self, db_context: WikiDBContext, nl_context: WikiNLContext , query: Optional[List[str]], allow_alias: bool = False) -> None:
         self.db_id = db_context.db_id
         self.allow_alias = allow_alias
 
         # NOTE: This base dictionary should not be modified.
         self.base_grammar_dictionary = deepcopy(GRAMMAR_DICTIONARY)
-        # self.base_grammar_dictionary = deepcopy(GRAMMAR_DICTIONARY_WIKI)
         self.origin_query = query
 
         def remove_from_clause(query: Optional[List[str]]) -> Optional[List[str]]:
@@ -65,9 +67,18 @@ class SpiderWorld:
 
         self.query = remove_from_clause(query)
         self.db_context = db_context
+        self.nl_context = nl_context
 
         # keep a list of entities names as they are given in sql queries
         self.entities_names = {}
+        #todo knowledge_graph . entities 一会要看看具体的结构
+        '''
+        ['column:text:1-10015132-11:col0', 'column:text:1-10015132-11:col1', 
+        'column:text:1-10015132-11:col2', 'column:text:1-10015132-11:col3', 
+        'column:text:1-10015132-11:col4', 'column:text:1-10015132-11:col5',
+         'string:butler_cc_ks',
+          'table:1-10015132-11']
+        '''
         for i, entity in enumerate(self.db_context.knowledge_graph.entities):
             parts = entity.split(':')
             if parts[0] in ['table', 'string']:
@@ -77,7 +88,7 @@ class SpiderWorld:
                 self.entities_names[f'{table_name}@{column_name}'] = i
         self.valid_actions = []
         self.valid_actions_flat = []
-
+    #todo 未修改
     def get_action_sequence_and_all_actions(self,
                                             allow_aliases: bool = False) -> Tuple[List[str], List[str]]:
         grammar_with_context = deepcopy(self.base_grammar_dictionary)
@@ -108,7 +119,7 @@ class SpiderWorld:
                 pass
 
         return action_sequence, sorted_actions
-
+    #todo 未修改
     def get_all_actions(self, schema,
                         flip_joins: bool,
                         allow_aliases: bool) -> Tuple[List[str], List[str]]:
@@ -131,13 +142,13 @@ class SpiderWorld:
         self.valid_actions_flat = sorted_actions
 
         return sorted_actions
-
+    #todo 未修改
     def is_global_rule(self, rhs: str) -> bool:
         rhs = rhs.strip('[] ')
         if rhs[0] != '"':
             return True
         return rhs.strip('"') not in self.entities_names
-
+    #todo 未修改
     def get_oracle_relevance_score(self, oracle_entities: set):
         """
         return 0/1 for each schema item if it should be in the graph,
@@ -156,6 +167,7 @@ class SpiderWorld:
 
         return scores
 
+    #todo 未修改
     def get_action_entity_mapping(self) -> Dict[int, int]:
         mapping = {}
 
@@ -171,7 +183,7 @@ class SpiderWorld:
             mapping[action_index] = self.entities_names[action_stripped]
 
         return mapping
-
+    #todo 未修改
     def get_query_without_table_hints(self):
         if not self.origin_query:
             return ''

@@ -5,7 +5,7 @@ for the any of the text2sql datasets, with the grammar and the valid actions.
 """
 from typing import List, Dict
 
-from dataset_readers.dataset_utils import  Table
+from dataset_readers.dataset_utils.common import Table
 
 
 GRAMMAR_DICTIONARY = {}
@@ -75,7 +75,7 @@ GRAMMAR_DICTIONARY["ordering"] = ['(ws "asc")', '(ws "desc")']
 GRAMMAR_DICTIONARY["col_ref"] = ['(table_name ws "." ws column_name)', 'column_name']
 GRAMMAR_DICTIONARY["table_source"] = ['(table_name ws "as" ws table_alias)', 'table_name']
 GRAMMAR_DICTIONARY["table_name"] = ["table_alias"]
-GRAMMAR_DICTIONARY["table_alias"] = ['"t1"', '"t2"', '"t3"', '"t4"', '"t5"', '"t6"']
+GRAMMAR_DICTIONARY["table_alias"] = ['"t1"', '"t2"', '"t3"', '"t4"']
 GRAMMAR_DICTIONARY["column_name"] = []
 
 GRAMMAR_DICTIONARY["ws"] = ['~"\s*"i']
