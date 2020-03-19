@@ -479,7 +479,7 @@ def print_scores(scores, etype):
             print("{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format(type_, *this_scores))
 
 
-def evaluate(gold, predict, db_dir, etype, kmaps):
+def evaluate(gold, predict, question, db_dir, etype, kmaps):
     with open(gold) as f:
         glist = [l.strip().split('\t') for l in f.readlines() if len(l.strip()) > 0]
 
@@ -501,8 +501,17 @@ def evaluate(gold, predict, db_dir, etype, kmaps):
         for type_ in partial_types:
             scores[level]['partial'][type_] = {'acc': 0., 'rec': 0., 'f1': 0.,'acc_count':0,'rec_count':0}
 
+    question_json_blob = json.load(open(question, "r"))
+    question_sql_dict: Dict[str, str] = {}
+    db_sql_dict: Dict[str, str] = {}
+    for index, instance in enumerate(question_json_blob):
+        question_sql_dict[index] = instance['question']
+        db_sql_dict[index] = instance['db_id']
+
     eval_err_num = 0
+    index = -1
     for p, g in zip(plist, glist):
+        index += 1
         p_str = p[0]
         g_str, db = g
         db_name = db
@@ -566,6 +575,8 @@ def evaluate(gold, predict, db_dir, etype, kmaps):
             if exact_score == 0:
                 print("{} pred: {}".format(hardness,p_str))
                 print("{} gold: {}".format(hardness,g_str))
+                print("{} question: {}".format(hardness, question_sql_dict[index]))
+                print("{} db_id: {}".format(hardness, db_sql_dict[index])) 
                 print("")
             scores[hardness]['exact'] += exact_score
             scores['all']['exact'] += exact_score
@@ -865,6 +876,7 @@ if __name__ == "__main__":
     parser.add_argument('--db', dest='db', type=str)
     parser.add_argument('--table', dest='table', type=str)
     parser.add_argument('--etype', dest='etype', type=str)
+    parser.add_argument('--question', dest='question', type=str)
     args = parser.parse_args()
 
     gold = args.gold
@@ -872,9 +884,10 @@ if __name__ == "__main__":
     db_dir = args.db
     table = args.table
     etype = args.etype
+    question= args.question
 
     assert etype in ["all", "exec", "match"], "Unknown evaluation method"
 
     kmaps = build_foreign_key_map_from_json(table)
 
-    evaluate(gold, pred, db_dir, etype, kmaps)
+    evaluate(gold, pred, question, db_dir, etype, kmaps)

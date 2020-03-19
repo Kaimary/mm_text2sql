@@ -1,5 +1,4 @@
 import torch
-from allennlp import nn
 from torch.nn import Parameter as Param
 
 class MemAttn(torch.nn.Module):
@@ -14,7 +13,8 @@ class MemAttn(torch.nn.Module):
         super(MemAttn, self).__init__()
         self.nhop = nhop
 
-        self.hidden = nn.Linear(embedding_dim * 2, embedding_dim)
+        self.tanh = torch.nn.Tanh()
+        self.hidden = torch.nn.Linear(embedding_dim * 2, embedding_dim)
 
     def forward(self,
                 Q: torch.Tensor,

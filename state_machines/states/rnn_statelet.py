@@ -64,8 +64,8 @@ class RnnStatelet:
         self.encoder_output_mask = encoder_output_mask
         self.decoder_outputs = decoder_outputs
         self.decoding_step = decoding_step
-        self.decoder_action_input_embeddings = decoder_input_action_embeddings
-        self.decoder_action_output_embeddings = decoder_output_action_embeddings
+        self.decoder_input_action_embeddings = decoder_input_action_embeddings
+        self.decoder_output_action_embeddings = decoder_output_action_embeddings
 
     def __eq__(self, other):
         if isinstance(self, other.__class__):

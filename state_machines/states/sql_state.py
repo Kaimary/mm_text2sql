@@ -3,19 +3,15 @@ import logging
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-# TODO
+
 class SqlState:
     def __init__(self,
                  possible_actions,
-                 related_schema,
                  enabled: bool=True):
         self.possible_actions = [a[0] for a in possible_actions]
-        self.schema = related_schema
         self.action_history = []
         self.tables_used = set()
         self.tables_used_by_columns = set()
-        self.columns_used_by_where = []
-        self.columns_used_by_where_stack = []
         self.current_stack = []
         self.subqueries_stack = []
         self.enabled = enabled
@@ -33,17 +29,17 @@ class SqlState:
         elif lhs == 'column_name':
             new_sql_state.tables_used_by_columns.add(rhs_tokens[0].strip('"').split('@')[0])
 
-            current_clause = self._get_current_open_clause()
-            if current_clause in ['where_clause']:
-                new_sql_state.columns_used_by_where.append(rhs_tokens[0].strip('"'))
+            # current_clause = self._get_current_open_clause()
+            # if current_clause in ['where_clause']:
+            #     new_sql_state.columns_used_by_where.append(rhs_tokens[0].strip('"'))
             # elif current_clause in ['select_core']:
             #     new_sql_state.columns_used_by_select.add(rhs_tokens[0].strip('"'))
         elif lhs == 'iue':
             new_sql_state.tables_used_by_columns = set()
             new_sql_state.tables_used = set()
         elif lhs == "source_subq":
-            if new_sql_state.columns_used_by_where:
-                new_sql_state.columns_used_by_where_stack.append(new_sql_state.columns_used_by_where[-1:])
+            # if new_sql_state.columns_used_by_where:
+            #     new_sql_state.columns_used_by_where_stack.append(new_sql_state.columns_used_by_where[-1:])
             new_sql_state.subqueries_stack.append(copy.deepcopy(new_sql_state))
             new_sql_state.tables_used = set()
             new_sql_state.tables_used_by_columns = set()
@@ -68,7 +64,7 @@ class SqlState:
             if finished_item == 'source_subq':
                 new_sql_state.tables_used = new_sql_state.subqueries_stack[-1].tables_used
                 new_sql_state.tables_used_by_columns = new_sql_state.subqueries_stack[-1].tables_used_by_columns
-                new_sql_state.columns_used_by_where_stack.pop()
+                # new_sql_state.columns_used_by_where_stack.pop()
                 del new_sql_state.subqueries_stack[-1]
 
         return new_sql_state
@@ -163,7 +159,8 @@ class SqlState:
                         actions_to_remove[rule_type].add(rule_id)
                     if 'groupby_clause' in self.current_stack[search_stack_pos][1]:
                         actions_to_remove[rule_type].add(rule_id)
-                # Parsing a subquery
+                '''
+				# Parsing a subquery
                 if lhs == 'column_name' and self._is_in_where_subq_clause():
                     candidate_column = rhs_values[0].strip('"').split('@')[1]
                     candidate_related_table = rhs_values[0].strip('"').split('@')[0]
@@ -186,7 +183,7 @@ class SqlState:
                         if last_column_foreign_key.split(':')[0] == candidate_related_table and last_column_foreign_key.split(':')[1] == candidate_column:
                             continue
                     actions_to_remove[rule_type].add(rule_id)
-
+				'''
         new_valid_actions = {}
         new_global_actions = self._remove_actions(valid_actions, 'global',
                                                   actions_to_remove['global']) if 'global' in valid_actions else None
@@ -250,7 +247,7 @@ class SqlState:
                 return rule[0]
 
         return None
-
+'''
     def _is_in_where_subq_clause(self):
         relevant_clauses = [
             'where_clause',
@@ -278,3 +275,4 @@ class SqlState:
                     return False
 
         return False
+'''

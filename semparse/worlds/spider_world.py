@@ -22,14 +22,13 @@ class SpiderWorld:
     """
     World representation for spider dataset.
     """
+
     def __init__(self, db_context: SpiderDBContext, query: Optional[List[str]], allow_alias: bool = False) -> None:
-    
         self.db_id = db_context.db_id
         self.allow_alias = allow_alias
 
         # NOTE: This base dictionary should not be modified.
         self.base_grammar_dictionary = deepcopy(GRAMMAR_DICTIONARY)
-        # self.base_grammar_dictionary = deepcopy(GRAMMAR_DICTIONARY_WIKI)
         self.origin_query = query
 
         def remove_from_clause(query: Optional[List[str]]) -> Optional[List[str]]:

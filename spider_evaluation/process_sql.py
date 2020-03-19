@@ -170,8 +170,8 @@ def parse_col(toks, start_idx, tables_with_alias, schema, default_tables=None):
     """
     global mapped_entities
     tok = toks[start_idx]
-    if tok == "*":
-        return start_idx + 1, schema.idMap[tok]
+    if "*" in tok:
+        return start_idx + 1, schema.idMap["*"]
 
     if '.' in tok:  # if token is a composite
         alias, col = tok.split('.')

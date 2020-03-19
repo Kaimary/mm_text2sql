@@ -4,18 +4,19 @@ import os
 from typing import List,Dict,Iterator
 import tqdm
 
+from overrides import overrides
+from spacy.symbols import ORTH, LEMMA
 from allennlp.common.checks import ConfigurationError
 from allennlp.data import DatasetReader, Tokenizer, TokenIndexer, Field, Instance
 from allennlp.data.fields import TextField, ProductionRuleField, ListField, IndexField, MetadataField,LabelField
 from allennlp.data.token_indexers import SingleIdTokenIndexer
 from allennlp.data.tokenizers import WordTokenizer
 from allennlp.data.tokenizers.word_splitter import SpacyWordSplitter
-from overrides import overrides
-from spacy.symbols import ORTH, LEMMA
+from dataset_readers.fields import SpiderKnowledgeGraphField,WikiKnowledgeGraphField
+from dataset_readers.dataset_utils import fix_number_value,disambiguate_items,gen_wiki_tokens
 from semparse.contexts.spider_db_context import SpiderDBContext
 from semparse.contexts.wiki_db_context import WikiDBContext
-from dataset_readers.dataset_utils import fix_number_value,disambiguate_items,gen_wiki_tokens
-from dataset_readers.fields import SpiderKnowledgeGraphField,WikiKnowledgeGraphField
+
 from semparse.worlds.spider_world import SpiderWorld
 from semparse.worlds.wiki_world import WikiWorld
 

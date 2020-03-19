@@ -5,7 +5,7 @@ local dataset_path = "dataset/";
   "numpy_seed": 5,
   "pytorch_seed": 5,
   "dataset_reader": {
-    "type": "base",
+    "type": "BaseReader",
     "tables_file": dataset_path + "tables.json",
     "dataset_path": dataset_path + "database",
     "lazy": false,
@@ -27,6 +27,13 @@ local dataset_path = "dataset/";
     "dataset_path": dataset_path,
     "parse_sql_on_decoding": true,
     "decoder_self_attend": true,
+    "question_embedder": {
+      "tokens": {
+        "type": "embedding",
+        "embedding_dim": 200,
+        "trainable": true
+      }
+    },
     "input_memory_embedder": {
       "tokens": {
         "type": "embedding",
@@ -44,8 +51,8 @@ local dataset_path = "dataset/";
     "action_embedding_dim": 200,
     "question_encoder": {
       "type": "lstm",
-      "input_size": 400,
-      "hidden_size": 400,
+      "input_size": 200,
+      "hidden_size": 200,
       "bidirectional": true,
       "num_layers": 1
     },

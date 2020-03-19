@@ -1,9 +1,10 @@
 import difflib
-from typing import Dict, Any, List, Tuple, Mapping, Sequence
+
 
 import overrides
 import sqlparse
 import torch
+from typing import Dict, Any, List, Tuple, Mapping, Sequence
 from allennlp.common.util import pad_sequence_to_length
 from allennlp.data import Vocabulary
 from allennlp.data.fields.production_rule_field import ProductionRule, ProductionRuleArray
@@ -40,6 +41,7 @@ class MMParser(Model):
                  question_encoder: Seq2SeqEncoder,
                  input_memory_encoder: Seq2VecEncoder,
                  output_memory_encoder: Seq2VecEncoder,
+                 decoder_beam_search: BeamSearch,
                  input_attention: Attention,
                  past_attention: Attention,
                  action_embedding_dim: int,
@@ -47,11 +49,14 @@ class MMParser(Model):
                  nhop: int,
                  decoding_nhop: int,
                  vocab: Vocabulary,
+                 dataset_path: str = 'dataset',
+                 parse_sql_on_decoding: bool = True,
                  training_beam_size: int = None,
                  add_action_bias: bool = True,
                  decoder_self_attend: bool = True,
                  decoder_num_layers: int = 1,
-                 dropout: float = 0.0) -> None:
+                 dropout: float = 0.0,
+                 rule_namespace: str = 'rule_labels') -> None:
         super().__init__(vocab)
 
         self.question_embedder = question_embedder
@@ -60,10 +65,12 @@ class MMParser(Model):
         self._question_encoder = question_encoder
         self._input_mm_encoder = TimeDistributed(input_memory_encoder)
         self._output_mm_encoder = TimeDistributed(output_memory_encoder)
-
+        
+        self.parse_sql_on_decoding = parse_sql_on_decoding
         self._self_attend = decoder_self_attend
         self._max_decoding_steps = max_decoding_steps
         self._add_action_bias = add_action_bias
+        self._rule_namespace = rule_namespace
         num_actions = vocab.get_vocab_size(self._rule_namespace)
         if self._add_action_bias:
             input_action_dim = action_embedding_dim + 1
@@ -73,16 +80,15 @@ class MMParser(Model):
         self._input_action_embedder = Embedding(num_embeddings=num_actions, embedding_dim=action_embedding_dim)
         self._output_action_embedder = Embedding(num_embeddings=num_actions, embedding_dim=action_embedding_dim)
 
+        self._num_entity_types = 9
         self._entity_type_decoder_input_embedding= Embedding(self._num_entity_types, action_embedding_dim)
         self._entity_type_decoder_output_embedding = Embedding(self._num_entity_types, action_embedding_dim)
 
-        self._num_entity_types = 9
-        self._entity_type_encoder_embedding = Embedding(self._num_entity_types, question_encoder.get_output_dim()/2)
+        self._entity_type_encoder_embedding = Embedding(self._num_entity_types, (int)(question_encoder.get_output_dim()/2))
 
         self._decoder_num_layers = decoder_num_layers
         self._action_embedding_dim = action_embedding_dim
 
-        # TODO
         self._ent2ent_ff = FeedForward(action_embedding_dim, 1, action_embedding_dim, Activation.by_name('relu')())
 
         if dropout > 0:
@@ -92,7 +98,9 @@ class MMParser(Model):
 
         self._first_action_embedding = torch.nn.Parameter(torch.FloatTensor(action_embedding_dim))
         self._first_attended_utterance = torch.nn.Parameter(
-            torch.FloatTensor(encoder_output_dim=question_encoder.get_output_dim()))
+            torch.FloatTensor(question_encoder.get_output_dim()))
+        torch.nn.init.normal_(self._first_action_embedding)
+        torch.nn.init.normal_(self._first_attended_utterance)
 
         if self._self_attend:
             self._transition_function = AttendPastSchemaItemsTransitionFunction(
@@ -115,18 +123,35 @@ class MMParser(Model):
                                                                   num_layers=self._decoder_num_layers)
 
         self._mm_attn = MemAttn(question_encoder.get_output_dim(), nhop)
+
+        self._beam_search = decoder_beam_search
         self._decoder_trainer = MaximumMarginalLikelihood(training_beam_size)
+        
+        self._action_padding_index = -1  # the padding value used by IndexField
+
+        self._exact_match = Average()
+        self._sql_evaluator_match = Average()
+        self._action_similarity = Average()
+        self._acc_single = Average()
+        self._acc_multi = Average()
+        self._beam_hit = Average()
+
+        # TODO: Remove hard-coded dirs
+        self._evaluate_func = partial(evaluate,
+                                      db_dir=os.path.join(dataset_path, 'database'),
+                                      table=os.path.join(dataset_path, 'tables.json'),
+                                      check_valid=False)
 
     @overrides
     def forward(self,
-                worlds: List[SpiderWorld],
-                valid_actions: List[List[ProductionRule]],
                 utterance: Dict[str, torch.LongTensor],
+                valid_actions: List[List[ProductionRule]],
+                world: List[SpiderWorld],
                 schema: Dict[str, torch.LongTensor],
                 action_sequence: torch.LongTensor = None) -> Dict[str, torch.Tensor]:
 
         device = utterance['tokens'].device
-        initial_state = self._get_initial_state(utterance, worlds, schema, valid_actions)
+        initial_state = self._get_initial_state(utterance, world, schema, valid_actions)
 
         if action_sequence is not None:
             # Remove the trailing dimension (from ListField[ListField[IndexField]]).
@@ -169,7 +194,7 @@ class MMParser(Model):
 
             self._compute_validation_outputs(valid_actions,
                                              best_final_states,
-                                             worlds,
+                                             world,
                                              action_sequence,
                                              outputs)
         return outputs
@@ -183,7 +208,7 @@ class MMParser(Model):
         utterance_mask = util.get_text_field_mask(utterance).float()
         embedded_utterance = self.question_embedder(utterance)
         batch_size, _, _ = embedded_utterance.size()
-        encoder_outputs = self._dropout(self.encoder(embedded_utterance, utterance_mask))
+        encoder_outputs = self._dropout(self._question_encoder(embedded_utterance, utterance_mask))
 
         schema_text = schema['text']
         input_mm_schema = self._input_mm_embedder(schema_text, num_wrapping_dims=1)
@@ -209,15 +234,16 @@ class MMParser(Model):
                        entity_type_embeddings], dim = 2)
         V = torch.cat([self._output_mm_encoder(output_mm_schema, schema_mask),
                        entity_type_embeddings], dim = 2)
-        encoder_output_dim = self._encoder.get_output_dim()
+        encoder_output_dim = self._question_encoder.get_output_dim()
 
         # Encodes utterance in the context of the schema, which is stored in external memory
         encoder_outputs_with_context, attn_weights = self._mm_attn(encoder_outputs, K, V)
+        attn_weights = attn_weights.transpose(1,2)
         final_encoder_output = util.get_final_encoder_states(encoder_outputs_with_context,
                                                              utterance_mask,
-                                                             self._encoder.is_bidirectional())
+                                                             self._question_encoder.is_bidirectional())
 
-        max_entities_relevance = attn_weights.max(dim=1)[0]
+        max_entities_relevance = attn_weights.max(dim=2)[0]
         entities_relevance = max_entities_relevance.unsqueeze(-1).detach()
         if self._self_attend:
             entities_ff = self._ent2ent_ff(entity_type_embeddings * entities_relevance)
@@ -253,7 +279,7 @@ class MMParser(Model):
                                                             entity_types[i])
                                  for i in range(batch_size)]
 
-        initial_sql_state = [SqlState(valid_actions[i], worlds[i].db_context.schema, self.parse_sql_on_decoding) for i
+        initial_sql_state = [SqlState(valid_actions[i], self.parse_sql_on_decoding) for i
                              in
                              range(batch_size)]
 
@@ -336,10 +362,9 @@ class MMParser(Model):
         valid_actions = world.valid_actions
         entity_map = {}
         entities = world.entities_names
-
         for entity_index, entity in enumerate(entities):
             entity_map[entity] = entity_index
-
+        
         translated_valid_actions: Dict[str, Dict[str, Tuple[torch.Tensor, torch.Tensor, List[int]]]] = {}
         for key, action_strings in valid_actions.items():
             translated_valid_actions[key] = {}
@@ -366,19 +391,17 @@ class MMParser(Model):
                 global_output_action_embeddings = self._output_action_embedder(global_action_tensor)
                 translated_valid_actions[key]['global'] = (global_input_embeddings,
                                                            global_input_action_embeddings,
-                                                           global_output_action_embeddings,
-                                                           list(global_action_ids))
+                                                           list(global_action_ids),
+                                                           global_output_action_embeddings)
+
             if linked_actions:
                 linked_rules, linked_action_ids = zip(*linked_actions)
                 entities = [rule.split(' -> ')[1].strip('[]\"') for rule in linked_rules]
-
                 entity_ids = [entity_map[entity] for entity in entities]
-
+                
                 entity_linking_scores = attn_weights[entity_ids]
-
                 if linked_actions_linking_scores is not None:
                     entity_action_linking_scores = linked_actions_linking_scores[entity_ids]
-
                 # if not self._decoder_use_graph_entities:
                 entity_type_tensor = entity_types[entity_ids]
                 entity_type_input_embeddings = (self._entity_type_decoder_input_embedding(entity_type_tensor)
@@ -387,6 +410,8 @@ class MMParser(Model):
                 entity_type_output_embeddings = (self._entity_type_decoder_output_embedding(entity_type_tensor)
                                           .to(entity_types.device)
                                           .float())
+                #entity_type_input_embeddings = None
+                #entity_type_output_embeddings = None
                 # else:
                 #     entity_type_embeddings = entity_graph_encoding.index_select(
                 #         dim=0,
@@ -426,6 +451,12 @@ class MMParser(Model):
         # Return 1 if the predicted sequence is anywhere in the list of targets.
         return torch.max(torch.min(targets_trimmed.eq(predicted_tensor), dim=0)[0]).item()
 
+    @staticmethod
+    def _query_difficulty(targets: torch.LongTensor, action_mapping, batch_index):
+        number_tables = len([action_mapping[(batch_index, int(a))] for a in targets if
+                             a >= 0 and action_mapping[(batch_index, int(a))].startswith('table_name')])
+        return number_tables > 1
+    
     @overrides
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         return {
@@ -436,6 +467,147 @@ class MMParser(Model):
             '_match/match_hard': self._acc_multi.get_metric(reset),
             'beam_hit': self._beam_hit.get_metric(reset)
         }
+
+    def find_shortest_path(self, start, end, graph):
+        stack = [[start, []]]
+        visited = set()
+        while len(stack) > 0:
+            ele, history = stack.pop()
+            if ele == end:
+                return history
+            for node in graph[ele]:
+                if node[0] not in visited:
+                    stack.append((node[0], history + [(node[0], node[1])]))
+                    visited.add(node[0])
+        # print("table {} table {}".format(start,end))
+
+    def _add_from_clause(self, origin_query, world: SpiderWorld):
+        predicted_sql_query_tokens = origin_query.split(" ")
+        # print("predicted_sql_query_tokens:{}".format(predicted_sql_query_tokens))
+
+        select_indices = [i for i, x in enumerate(predicted_sql_query_tokens) if x == "select"]
+        select_indices.append(len(predicted_sql_query_tokens))
+        # From bottom to top
+        select_indices.reverse()
+        dbs_json_blob = json.load(open(world.db_context.tables_file, "r"))
+        graph = defaultdict(list)
+        table_list = []
+        dbtable = {}
+        for table in dbs_json_blob:
+            if world.db_id == table['db_id']:
+                dbtable = table
+                for acol, bcol in table["foreign_keys"]:
+                    t1 = table["column_names"][acol][0]
+                    t2 = table["column_names"][bcol][0]
+                    graph[t1].append((t2, (acol, bcol)))
+                    graph[t2].append((t1, (bcol, acol)))
+                table_list = [table for table in table["table_names_original"]]
+        # print("table_list:{}".format(table_list))
+
+        end_idx = select_indices[0]
+        for index in select_indices[1:]:
+            table_alias_dict = {}
+            idx = 1
+
+            start_idx = index
+            tables = set(
+                [token.split(".")[0] for token in predicted_sql_query_tokens[start_idx: end_idx] if '.' in token])
+            # print(tables)
+            candidate_tables: List[int] = []
+            for table in tables:
+                for i, table1 in enumerate(table_list):
+                    if table1.lower() == table:
+                        candidate_tables.append(i)
+                        break
+            # print("\ncandidate_tables:{}".format(candidate_tables))
+            ret = ""
+            flag_only_sel_count = False
+            if len(candidate_tables) > 1:
+                start = candidate_tables[0]
+                table_alias_dict[start] = idx
+                idx += 1
+                ret = "from {}".format(dbtable["table_names_original"][start])
+                try:
+                    for end in candidate_tables[1:]:
+                        if end in table_alias_dict:
+                            continue
+                        path = self.find_shortest_path(start, end, graph)
+                        # print("got path = {}".format(path))
+                        prev_table = start
+                        if not path:
+                            table_alias_dict[end] = idx
+                            idx += 1
+                            ret = "{} join {}".format(ret, dbtable["table_names_original"][end])
+                            continue
+                        for node, (acol, bcol) in path:
+                            if node in table_alias_dict:
+                                prev_table = node
+                                continue
+                            table_alias_dict[node] = idx
+                            idx += 1
+                            # print("test every slot:")
+                            # print("table:{}, dbtable:{}".format(table, dbtable))
+                            # print(dbtable["table_names_original"][node])
+                            # print(dbtable["table_names_original"][prev_table])
+                            # print(dbtable["column_names_original"][acol][1])
+                            # print(dbtable["table_names_original"][node])
+                            # print(dbtable["column_names_original"][bcol][1])
+                            ret = "{} join {} on {}.{} = {}.{}".format(ret, dbtable["table_names_original"][node],
+                                                                       dbtable["table_names_original"][prev_table],
+                                                                       dbtable["column_names_original"][acol][1],
+                                                                       dbtable["table_names_original"][node],
+                                                                       dbtable["column_names_original"][bcol][1])
+                            prev_table = node
+
+                except:
+                    print("\n!!Exception in spider_parser.py : line 924!! \npredicted_sql_query_tokens:{}".format(
+                        predicted_sql_query_tokens))
+                # print(ret)
+            # If all the columns from one table, generate FROM Clause directly
+            elif len(candidate_tables) == 1:
+                ret = "from {}".format(tables.pop())
+                # print("\nret:{}".format(ret))
+            else:
+                ret = 'from'
+                flag_only_sel_count = True
+
+            if not flag_only_sel_count:
+                flag = False
+                index = start_idx + len(predicted_sql_query_tokens[start_idx:end_idx])
+                brace_count = 0
+                for ii, token in enumerate(predicted_sql_query_tokens[start_idx:end_idx]):
+                    if token == "(":
+                        brace_count += 1
+                    if token == ")":
+                        if brace_count == 0:
+                            index = ii + start_idx
+                            predicted_sql_query_tokens = predicted_sql_query_tokens[:index] + [ret] + \
+                                                         predicted_sql_query_tokens[index:]
+                            # print(predicted_sql_query_tokens)
+                            flag = True
+                            break
+                        else:
+                            brace_count -= 1
+                    if token == "where" or token == "group" or token == "order":
+                        index = ii + start_idx
+                        predicted_sql_query_tokens = predicted_sql_query_tokens[:index] + [ret] + \
+                                                     predicted_sql_query_tokens[index:]
+                        flag = True
+                        # print(predicted_sql_query_tokens)
+                        break
+                if not flag:
+                    predicted_sql_query_tokens = predicted_sql_query_tokens[:index] + [ret]
+                    # print("\npredicted_sql_query_tokens:{}".format(' '.join([token for token in predicted_sql_query_tokens])))
+            else:
+                for ii, token in enumerate(predicted_sql_query_tokens[start_idx:end_idx]):
+                    if token == "from_count":
+                        predicted_sql_query_tokens = predicted_sql_query_tokens[:ii] + [ret] + \
+                                                     predicted_sql_query_tokens[ii + 1:]
+                        # print("\npredicted_sql_query:{}".format(' '.join([token for token in predicted_sql_query_tokens])))
+                        break
+            end_idx = start_idx
+            # print("predicted_sql_query_tokens:{}".format(predicted_sql_query_tokens))
+        return ' '.join(['*' if '.*' in token else token for token in predicted_sql_query_tokens])
 
     def _compute_validation_outputs(self,
                                     actions: List[List[ProductionRuleArray]],
